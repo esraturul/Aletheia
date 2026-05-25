@@ -1,0 +1,34 @@
+# Python Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+pyvenv.cfg
+.Python
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+
+# Aletheia Core Databases (CRITICAL: Private Documents inside ChromaDB)
+chroma_db/
+**/chroma_db/
+*.db
+*.sqlite3
+
+# System Server Logs (CRITICAL: Prevent path and API leak)
+*.log
+backend.log
+frontend.log
+
+# Secret Environment Files (CRITICAL: API Keys)
+.env
+.env.*
+.secrets
+secrets.json
+
+# IDEs & System Files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
