@@ -1,6 +1,6 @@
 #!/bin/bash
 # Aletheia Local Runner Script
-# Author: Senior AI Architect
+
 
 # Colors for logging
 GREEN='\033[0;32m'
