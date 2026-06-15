@@ -274,7 +274,10 @@ if start_btn and query_input:
     backend_url = "http://localhost:8999/api/verify"
     params = {
         "query": query_input,
-        "temperature": temp_slider
+        "temperature": temp_slider,
+        "source_threshold": trust_slider,
+        "use_web": str(web_mcp).lower(),
+        "use_news": str(news_mcp).lower(),
     }
     
     try:
@@ -351,11 +354,18 @@ col_chart_1, col_chart_2, col_chart_3 = nn.columns([1, 1, 1.2])
 hallucination_score = nn.session_state.checkpoint.get("hallucination_score", 0.0)
 faith_score = max(0.0, min(1.0, 1.0 - hallucination_score))
 
-# Heuristic Answer Relevance based on retrieved facts vs conflicts
+# Answer Relevance derived from the actual verified facts: the mean confidence score
+# the cross-checker assigned to the grounded claims (0.0 when nothing was verified).
 facts_count = len(nn.session_state.verified_facts)
 conflicts_count = len(nn.session_state.detected_conflicts)
 total_claims = facts_count + conflicts_count
-relevance_score = 0.95 if total_claims > 0 else 0.0
+if facts_count > 0:
+    confidences = [
+        float(f.get("confidence_score", 0.0)) for f in nn.session_state.verified_facts
+    ]
+    relevance_score = max(0.0, min(1.0, sum(confidences) / len(confidences)))
+else:
+    relevance_score = 0.0
 
 with col_chart_1:
     # Faithfulness Gauge (RAG Document Grounding)

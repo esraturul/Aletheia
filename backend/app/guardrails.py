@@ -121,9 +121,16 @@ def evaluate_faithfulness(generated_facts: List[VerifiedFact], rag_context: List
         
     except Exception as e:
         logger.error(f"Error evaluating faithfulness: {e}")
-        # Secure fallback: if evaluation fails, return score 1.0 but flag the warning
+        # FAIL-SAFE (not fail-open): if the audit itself fails, we CANNOT confirm the
+        # claims are grounded, so we must return a score BELOW the trust threshold and
+        # flag it clearly. Silently passing would defeat the entire anti-hallucination
+        # purpose of this guardrail.
         return {
-            "faithfulness_score": 0.88,
-            "reasoning": f"Denetçi değerlendirmesi sırasında bir teknik aksaklık oluştu. Hata: {str(e)}. "
-                         "Sistem otomatik güven moduyla raporlamaya devam ediyor."
+            "faithfulness_score": 0.40,
+            "reasoning": (
+                f"DENETİM BAŞARISIZ: Sadakat değerlendirmesi teknik bir hata nedeniyle tamamlanamadı "
+                f"(Hata: {str(e)}). İddiaların kaynaklarca desteklendiği DOĞRULANAMADIĞI için, "
+                "fail-safe ilkesi gereği skor güven eşiğinin altında tutulmuştur. Rapor "
+                "'doğrulanamadı' uyarısıyla sunulmalıdır."
+            ),
         }

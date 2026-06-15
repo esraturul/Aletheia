@@ -11,9 +11,11 @@ Description:
 import os
 import logging
 import requests
+# pyrefly: ignore [missing-import]
 import feedparser
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+# pyrefly: ignore [missing-import]
 from mcp.server.fastmcp import FastMCP
 
 # Configure logging

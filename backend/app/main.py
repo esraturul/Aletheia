@@ -10,8 +10,10 @@ Description:
 
 import os
 import json
+import uuid
 import logging
 import asyncio
+from datetime import datetime, timezone
 from fastapi import FastAPI, Query, status
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,11 +32,13 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS Middleware for cross-origin frontend requests
+# Configure CORS Middleware for cross-origin frontend requests.
+# NOTE: a wildcard origin is incompatible with credentialed requests per the CORS
+# spec, so allow_credentials must stay False while allow_origins is "*".
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -47,29 +51,44 @@ class VerificationRequest(BaseModel):
     query: str = Field(..., description="Araştırılmak istenen canlı konu veya sorgu")
     temperature: float = Field(default=0.0, ge=0.0, le=1.0, description="LLM üretkenlik sıcaklığı (0.0=katı, 1.0=yaratıcı)")
     source_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="Kaynak güvenilirlik eşik değeri")
+    use_web: bool = Field(default=True, description="Web arama MCP entegrasyonunu etkinleştir")
+    use_news: bool = Field(default=True, description="Canlı haber MCP entegrasyonunu etkinleştir")
 
 # ==========================================
 # 2. SSE Event Stream Generator
 # ==========================================
 
-async def event_stream_generator(query: str, temperature: float):
+async def event_stream_generator(
+    query: str,
+    temperature: float,
+    source_threshold: float = 0.0,
+    use_web: bool = True,
+    use_news: bool = True,
+):
     """
-    Asynchronously executes the LangGraph workflow step-by-step 
+    Asynchronously executes the LangGraph workflow step-by-step
     and yields Server-Sent Events (SSE) to the client.
     """
-    logger.info(f"Starting SSE event stream for query: '{query}' with temp={temperature}")
-    
+    session_id = uuid.uuid4().hex
+    logger.info(f"Starting SSE event stream (session={session_id}) for query: '{query}' with temp={temperature}")
+
     # Initialize state inputs
     inputs = {
         "query": query,
         "temperature": temperature,
+        "source_threshold": source_threshold,
+        "faithfulness_threshold": 0.85,
+        "use_web": use_web,
+        "use_news": use_news,
+        "session_id": session_id,
         "rag_context": [],
         "detected_conflicts": [],
         "verified_facts": [],
         "final_report": "",
         "hallucination_score": 0.0,
         "logs": [],
-        "iterations": 0
+        "iterations": 0,
+        "audit_feedback": "",
     }
     
     sent_logs_count = 0
@@ -124,10 +143,13 @@ async def event_stream_generator(query: str, temperature: float):
 @app.get("/api/verify")
 async def verify_stream(
     query: str = Query(..., description="Doğrulamak istediğiniz sorgu"),
-    temperature: float = Query(default=0.0, ge=0.0, le=1.0, description="Yapay zeka sıcaklık parametresi")
+    temperature: float = Query(default=0.0, ge=0.0, le=1.0, description="Yapay zeka sıcaklık parametresi"),
+    source_threshold: float = Query(default=0.0, ge=0.0, le=1.0, description="Kaynak güvenilirlik eşik değeri"),
+    use_web: bool = Query(default=True, description="Web arama MCP entegrasyonu"),
+    use_news: bool = Query(default=True, description="Canlı haber MCP entegrasyonu"),
 ):
     """
-    GET endpoint returning a Server-Sent Events (SSE) stream of 
+    GET endpoint returning a Server-Sent Events (SSE) stream of
     the Aletheia agent verification process.
     """
     headers = {
@@ -137,7 +159,7 @@ async def verify_stream(
         "X-Accel-Buffering": "no"  # Critical for Nginx reverse-proxies to prevent buffering
     }
     return StreamingResponse(
-        event_stream_generator(query, temperature),
+        event_stream_generator(query, temperature, source_threshold, use_web, use_news),
         headers=headers,
         media_type="text/event-stream"
     )
@@ -149,10 +171,10 @@ async def health_check():
     """
     return {
         "status": "healthy",
-        "timestamp": os.popen("date").read().strip()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 if __name__ == "__main__":
     import uvicorn
-    # Start FastAPI server on port 8000
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # Start FastAPI server on port 8999 (matches run_local.sh and the frontend client).
+    uvicorn.run("backend.app.main:app", host="0.0.0.0", port=8999, reload=True)

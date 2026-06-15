@@ -21,6 +21,14 @@ if [ -d "venv" ]; then
     source venv/bin/activate
 fi
 
+# Load .env file if it exists
+if [ -f ".env" ]; then
+    echo -e "${GREEN}[Sistem] .env dosyası yükleniyor...${NC}"
+    set -a
+    source .env
+    set +a
+fi
+
 # Function to clean up background processes on exit
 cleanup() {
     echo -e "\n${RED}[Sistem] Kapatma sinyali alındı. Sunucular sonlandırılıyor...${NC}"

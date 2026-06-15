@@ -16,8 +16,9 @@ from pydantic import BaseModel, Field
 # Ensure the parent directory is in the path to import mcp_servers
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from mcp_servers.web_scraper_server import search_web
-from mcp_servers.news_api_server import fetch_live_news
+# Tools are invoked over the Model Context Protocol via the MCP client bridge
+# (with automatic in-process fallback if a server cannot be reached).
+from mcp_servers.mcp_client import mcp_search_web, mcp_fetch_live_news
 
 # Configure logging
 logger = logging.getLogger("AletheiaAgents")
@@ -46,113 +47,106 @@ class AletheiaReport(BaseModel):
 # 2. LLM Initialization and Factory
 # ==========================================
 
+def _extract_context_block(messages) -> str:
+    """
+    Best-effort extraction of the RAG context text from the prompt messages so the
+    mock can ground its simulated output in whatever was actually retrieved,
+    instead of returning a hardcoded topic.
+    """
+    try:
+        if isinstance(messages, str):
+            return messages
+        text = ""
+        for m in messages:
+            if isinstance(m, dict):
+                text += str(m.get("content", "")) + "\n"
+            else:
+                text += str(getattr(m, "content", m)) + "\n"
+        return text
+    except Exception:
+        return ""
+
+
 class MockStructuredLLM:
     """
-    Simulates a structured output Chat LLM. 
-    Natively supports invoke() and returns the expected Pydantic model response.
+    Simulates a structured-output Chat LLM for zero-key local demos.
+    Grounds its simulated facts/conflicts in the retrieved context that is present
+    in the prompt, so the output reflects the actual query rather than a fixed topic.
     """
     def __init__(self, schema):
         self.schema = schema
-        
+
     def invoke(self, messages):
         schema_name = self.schema.__name__
         logger.info(f"[AletheiaMockLLM] Simulating structured output for: {schema_name}")
-        
+        context = _extract_context_block(messages)
+
         if schema_name == "AletheiaReport":
+            # Derive a short snippet from the retrieved context to ground the demo output.
+            snippet = " ".join(context.split())[:240] if context.strip() else ""
+            if snippet:
+                fact_statement = (
+                    "Çekilen kaynaklarda konuyla ilgili şu bağlam doğrulanmıştır: "
+                    f"\"{snippet}...\""
+                )
+                summary = (
+                    "Yerel demo modunda (LLM anahtarı yok) çalışılıyor. Aşağıdaki bulgular, "
+                    "RAG veritabanına indekslenen canlı kaynaklardan türetilmiştir."
+                )
+            else:
+                fact_statement = (
+                    "Bağlam bulunamadı; canlı kaynaklardan indekslenebilir veri elde edilemedi."
+                )
+                summary = "Yerel demo modunda çalışılıyor ve RAG bağlamı boş döndü."
+
             return AletheiaReport(
-                summary="TÜİK ve ENAG 2025 yılı yıllık enflasyon verileri ve kamuoyuna yansıyan iddialar incelenmiştir. Kurumlar arasında metodoloji ve fiyat derleme sıklığı kaynaklı derin bir uyuşmazlık bulunmaktadır.",
+                summary=summary,
                 facts=[
                     VerifiedFact(
-                        statement="TÜİK (Türkiye İstatistik Kurumu), 2025 yılı tüketici enflasyonunu (TÜFE) resmi olarak yıllık %45.8 olarak açıklamıştır.",
-                        confidence_score=0.95,
-                        sources=["https://www.tuik.gov.tr"],
-                        counter_claims=["Enflasyon oranlarının gizlendiği iddiaları"]
-                    ),
-                    VerifiedFact(
-                        statement="ENAG (Enflasyon Araştırma Grubu), bağımsız akademisyenlerce yapılan ölçümlerde aynı dönem için yıllık enflasyon oranını %112.4 olarak hesaplamıştır.",
-                        confidence_score=0.92,
-                        sources=["https://enagrup.org"],
-                        counter_claims=["Akademik sepet ağırlığı hesaplama iddiaları"]
-                    ),
-                    VerifiedFact(
-                        statement="Uyuşmazlığın temel sebebi metodolojiktir; TÜİK statik ve aylık periyotlarla fiyat toplarken, ENAG günlük bazda milyonlarca online fiyat verisini web kazıma yöntemleriyle tarar.",
-                        confidence_score=0.89,
+                        statement=fact_statement,
+                        confidence_score=0.80,
                         sources=["Web Search Scraper", "Live News Feeds"],
-                        counter_claims=[]
+                        counter_claims=[],
                     )
                 ],
-                conflicts=[
-                    DetectedConflict(
-                        title="Çarpıcı Rakam Uyuşmazlığı",
-                        description="Resmi TÜİK verisi (%45.8) ile bağımsız ENAG verisi (%112.4) arasında tüketici aleyhine %66.6'lık devasa bir fark bulunmaktadır.",
-                        sources=["Resmi TÜİK Bülteni", "ENAG Ocak 2026 Raporu"]
-                    ),
-                    DetectedConflict(
-                        title="Metodoloji ve Veri Toplama Sıklığı Uyuşmazlığı",
-                        description="TÜİK madde sepeti fiyatlarını statik zaman aralıklarıyla alırken ENAG dinamik web scraping ile anlık fiyat artışlarını yakalamaktadır.",
-                        sources=["Web Search Scraper"]
-                    )
-                ]
+                conflicts=[],
             )
         elif schema_name == "FaithfulnessEvaluation":
             # For our guardrail faithfulness checks
             from backend.app.guardrails import FaithfulnessEvaluation
             return FaithfulnessEvaluation(
-                faithfulness_score=0.95,
-                reasoning="Üretilen veriler RAG dökümanlarındaki TÜİK ve ENAG bildirimleriyle %95 oranında uyuşmaktadır."
+                faithfulness_score=0.90,
+                reasoning="Demo modunda üretilen bulgular doğrudan RAG bağlamından türetildiği için yüksek sadakatli kabul edilmiştir.",
             )
         else:
             return self.schema()
 
+
 class AletheiaMockLLM:
     """
-    A custom mock Chat LLM that natively implements with_structured_output 
-    to provide high-end, zero-key local demonstrations.
+    A custom mock Chat LLM that natively implements with_structured_output
+    to provide zero-key local demonstrations grounded in the retrieved context.
     """
     def with_structured_output(self, schema):
         return MockStructuredLLM(schema)
-        
+
     def invoke(self, messages):
         logger.info("[AletheiaMockLLM] Simulating Markdown Synthesis Report...")
-        mock_markdown_report = """# 🛸 ALETHEIA // DOĞRULAMA VE ARAŞTIRMA RAPORU
-
-## 📊 GENEL DURUM VE HAKİKAT ÖZETİ
-TÜİK ve ENAG'ın 2025 yılı enflasyon verileri ve kamuoyundaki iddialar çapraz sorgulanmıştır. Kurumlar arasında metodoloji, sepet ağırlıkları ve veri toplama sıklığından kaynaklanan derin uyuşmazlıklar tespit edilmiştir. 
-Analiz sonucunda **Sadakat / Doğruluk Skoru %95** olarak hesaplanmıştır.
-
----
-
-## 📜 DOĞRULANMIŞ HAKİKATLER (VERIFIED FACTS)
-
-1. **Resmi Enflasyon Beyanı [1]**:
-   * TÜİK (Türkiye İstatistik Kurumu), 2025 yılı için yıllık tüketici enflasyonunu (TÜFE) resmi olarak **%45.8** olarak açıklamıştır.
-   * *Güven Skoru:* %95 | *Kaynak:* [Resmi TÜİK Bülteni](https://www.tuik.gov.tr)
-
-2. **Bağımsız Akademik Ölçüm [2]**:
-   * ENAG (Enflasyon Araştırma Grubu), aynı dönem için yıllık tüketici enflasyon oranını **%112.4** olarak hesaplamıştır.
-   * *Güven Skoru:* %92 | *Kaynak:* [ENAG Ocak 2026 Raporu](https://enagrup.org)
-
-3. **Metodolojik Uyuşmazlık Sebepleri [3]**:
-   * TÜİK ayda belirli aralıklarla fiyat derlerken, ENAG günlük bazda milyonlarca online fiyat verisini web kazıma (web scraping) yöntemleriyle taramaktadır.
-   * *Güven Skoru:* %89 | *Kaynak:* [Reuters Ekonomi Analizi](https://reuters.com)
-
----
-
-## ⚠️ TESPİT EDİLEN DERİN ÇELİŞKİLER (CONFLICTS DETECTED)
-
-### 🔴 1. Çarpıcı Rakam Uyuşmazlığı [%66.6 Fark]
-* **Açıklama:** Resmi TÜİK verisi (%45.8) ile bağımsız ENAG verisi (%112.4) arasında tüketici aleyhine **%66.6'lık** devasa bir fark bulunmaktadır. Bu durum kamuoyunda enflasyonun gizlendiği iddialarını tetiklemektedir.
-* **Kaynaklar:** [Resmi TÜİK Bülteni](https://www.tuik.gov.tr) | [ENAG Ocak 2026 Raporu](https://enagrup.org) | [Reuters Ekonomi Analizi](https://reuters.com)
-
-### 🔴 2. Fiyat Toplama Sıklığı ve Sepet Farkı
-* **Açıklama:** TÜİK resmi madde sepeti fiyatlarını statik zaman aralıklarıyla güncellerken, ENAG dinamik web scraping ile anlık fiyat artışlarını yakalamaktadır. Bu durum uyuşmazlığı artırmaktadır.
-* **Kaynaklar:** [Web Search Scraper](https://github.com/mcp-servers)
-
----
-
-## 🛡️ SİSTEM NOTU & AUDIT LOG
-*Bu rapor, Aletheia Analiz Motoru tarafından anlık olarak dökümanlar ve canlı web verileri üzerinden sentezlenmiştir.*
-"""
+        context = _extract_context_block(messages)
+        # Surface whatever facts/conflicts were threaded into the reporter prompt.
+        body = context.strip() or "Görüntülenecek doğrulanmış veri bulunamadı."
+        mock_markdown_report = (
+            "# 🛡️ ALETHEIA // DOĞRULAMA VE ARAŞTIRMA RAPORU\n\n"
+            "## 📊 GENEL DURUM\n"
+            "*Yerel demo modunda (LLM anahtarı yapılandırılmadı) çalışılıyor.* "
+            "Aşağıdaki içerik, ajanların canlı kaynaklardan derleyip doğruladığı verilerden sentezlenmiştir.\n\n"
+            "---\n\n"
+            "## 📜 DERLENEN DOĞRULAMA İÇERİĞİ\n\n"
+            f"{body}\n\n"
+            "---\n\n"
+            "## 🛡️ SİSTEM NOTU\n"
+            "*Gerçek LLM sentezi için OPENAI_API_KEY tanımlayın; bu çıktı yerel mock üreticisinden gelmektedir.*\n"
+        )
         from langchain_core.messages import AIMessage
         return AIMessage(content=mock_markdown_report)
 
@@ -179,35 +173,45 @@ def get_llm(temperature: float = 0.0):
 # 3. Agent Functions
 # ==========================================
 
-def run_scraper_agent(query: str, rag_engine: Any) -> Dict[str, Any]:
+def run_scraper_agent(query: str, rag_engine: Any, use_web: bool = True, use_news: bool = True) -> Dict[str, Any]:
     """
     Scraper Agent:
-    Queries MCP Search and News tools, compiles retrieved documents,
-    and indexes them into the RAG database.
+    Queries the MCP Search and News servers (over the protocol), compiles retrieved
+    documents, and indexes them into the RAG database.
+
+    Args:
+        use_web: Enable the web search MCP integration.
+        use_news: Enable the live news MCP integration.
     """
     logs = []
     logger.info("Scraper Agent started working...")
     logs.append("[Scraper] Arama ve canlı haber tarama süreci başlatıldı...")
-    
-    # 1. Fetch from news server
+
+    # 1. Fetch from news MCP server
     news_context = ""
-    try:
-        logs.append(f"[Scraper] Live News API/RSS sunucusu tetikleniyor: '{query}'")
-        news_context = fetch_live_news(query, max_results=4)
-        logs.append("[Scraper] Canlı haber akışları başarıyla çekildi.")
-    except Exception as e:
-        logger.error(f"Error fetching news: {e}")
-        logs.append(f"[Scraper] Haber çekme hatası: {str(e)}")
-        
-    # 2. Fetch from web search server
+    if use_news:
+        try:
+            logs.append(f"[Scraper] Live News MCP sunucusu (protokol) tetikleniyor: '{query}'")
+            news_context = mcp_fetch_live_news(query, max_results=4)
+            logs.append("[Scraper] Canlı haber akışları başarıyla çekildi.")
+        except Exception as e:
+            logger.error(f"Error fetching news: {e}")
+            logs.append(f"[Scraper] Haber çekme hatası: {str(e)}")
+    else:
+        logs.append("[Scraper] Haber entegrasyonu kullanıcı tarafından devre dışı bırakıldı.")
+
+    # 2. Fetch from web search MCP server
     web_context = ""
-    try:
-        logs.append(f"[Scraper] Web Scraper arama sunucusu tetikleniyor: '{query}'")
-        web_context = search_web(query, max_results=3, scrape_contents=True)
-        logs.append("[Scraper] Canlı web kaynakları ve sayfa içerikleri kazındı.")
-    except Exception as e:
-        logger.error(f"Error searching web: {e}")
-        logs.append(f"[Scraper] Web arama hatası: {str(e)}")
+    if use_web:
+        try:
+            logs.append(f"[Scraper] Web Scraper MCP sunucusu (protokol) tetikleniyor: '{query}'")
+            web_context = mcp_search_web(query, max_results=3, scrape_contents=True)
+            logs.append("[Scraper] Canlı web kaynakları ve sayfa içerikleri kazındı.")
+        except Exception as e:
+            logger.error(f"Error searching web: {e}")
+            logs.append(f"[Scraper] Web arama hatası: {str(e)}")
+    else:
+        logs.append("[Scraper] Web arama entegrasyonu kullanıcı tarafından devre dışı bırakıldı.")
 
     # 3. Index raw texts into RAG Engine
     documents = []
@@ -244,18 +248,30 @@ def run_scraper_agent(query: str, rag_engine: Any) -> Dict[str, Any]:
         "indexed": len(documents) > 0
     }
 
-def run_cross_checker_agent(query: str, rag_engine: Any, temperature: float = 0.0) -> Dict[str, Any]:
+def run_cross_checker_agent(
+    query: str,
+    rag_engine: Any,
+    temperature: float = 0.0,
+    min_trust_score: float = 0.0,
+    audit_feedback: str = "",
+) -> Dict[str, Any]:
     """
     Cross-Checker Agent:
-    Retrieves matching chunks from RAG, detects contradictions, 
+    Retrieves matching chunks from RAG, detects contradictions,
     and uses structured LLM to format facts and conflicts.
+
+    Args:
+        min_trust_score: Source-trust threshold applied when retrieving RAG chunks.
+        audit_feedback: Feedback from a previous faithfulness audit. When present, it is
+            injected into the prompt so the agent corrects unsupported claims instead of
+            regenerating the same output (this is what makes the correction loop effective).
     """
     logs = []
     logger.info("Cross-Checker Agent started working...")
     logs.append("[Cross-Checker] RAG veritabanından anlamsal bağlam çekiliyor...")
-    
+
     # 1. Retrieve & Rerank chunks
-    chunks = rag_engine.query_and_rerank(query, top_n=3)
+    chunks = rag_engine.query_and_rerank(query, top_n=3, min_trust_score=min_trust_score)
     
     if not chunks:
         logs.append("[Cross-Checker] RAG'den ilgili veri çekilemedi. Arama yetersiz olabilir.")
@@ -288,9 +304,22 @@ def run_cross_checker_agent(query: str, rag_engine: Any, temperature: float = 0.
         "bilgileri doğru kabul etme (%0 Halüsinasyon hedefiyle çalış!)."
     )
     
+    # If a previous audit flagged unsupported claims, steer this pass to correct them.
+    correction_block = ""
+    if audit_feedback:
+        logs.append("[Cross-Checker] Önceki denetim geri bildirimi dikkate alınarak düzeltme yapılıyor...")
+        correction_block = (
+            "\n!!! ÖNEMLİ DÜZELTME TALİMATI !!!\n"
+            "Bir önceki denemende ürettiğin bazı iddialar bağlam dökümanları tarafından "
+            "desteklenmiyordu. Aşağıdaki denetçi geri bildirimini dikkate al; SADECE bağlam "
+            "dökümanlarında doğrudan desteklenen iddiaları üret, desteklenmeyenleri tamamen çıkar:\n"
+            f"--- DENETÇİ GERİ BİLDİRİMİ ---\n{audit_feedback}\n--- BİTİŞ ---\n"
+        )
+
     user_prompt = (
         f"Kullanıcı Araştırma Sorgusu: '{query}'\n\n"
         f"Sorguyla İlgili RAG Bağlam Verileri:\n{context_str}\n"
+        f"{correction_block}"
         "Lütfen bu verileri çapraz sorgula. Çelişkili durumları 'conflicts' altında, "
         "kesin ve kaynaklarca doğrulanan verileri ise 'facts' altında toplayarak "
         "AletheiaReport şemasına uygun şekilde JSON formatında dön."

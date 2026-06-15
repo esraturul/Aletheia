@@ -39,12 +39,30 @@ class AletheiaState(TypedDict):
     logs: List[str]
     iterations: int
     temperature: float
+    session_id: str
+    source_threshold: float
+    faithfulness_threshold: float
+    use_web: bool
+    use_news: bool
+    audit_feedback: str
 
 # ==========================================
-# 2. Global RAG Engine Instance
+# 2. Per-session RAG engine registry
 # ==========================================
+#
+# Heavy models are shared process-wide (see rag_engine module), but each request
+# gets its own isolated collection keyed by session_id so concurrent verifications
+# never clobber one another.
 
-rag_engine = AletheiaRAGEngine()
+_engines: Dict[str, AletheiaRAGEngine] = {}
+
+
+def _get_engine(state: AletheiaState) -> AletheiaRAGEngine:
+    """Returns (creating if needed) the RAG engine bound to this request's session."""
+    session_id = state.get("session_id") or "default"
+    if session_id not in _engines:
+        _engines[session_id] = AletheiaRAGEngine(session_id=session_id)
+    return _engines[session_id]
 
 # ==========================================
 # 3. Agent Nodes Definition
@@ -56,21 +74,23 @@ def scraper_node(state: AletheiaState) -> Dict[str, Any]:
     """
     logger.info("Executing Scraper Node...")
     query = state.get("query", "")
-    
+    use_web = state.get("use_web", True)
+    use_news = state.get("use_news", True)
+
     # Reset or initialize state parameters
     current_logs = state.get("logs", []) or []
     current_logs.append("--- [SİSTEM BAŞLANGICI: ALETHEIA VERIFICATION MOTORU] ---")
-    
-    # Clear the temporary DB collection for the new session to keep it fresh
-    rag_engine.clear_database()
-    
-    # Run Scraper Agent
-    res = run_scraper_agent(query, rag_engine)
-    
+
+    # Each request operates on its own fresh, isolated collection.
+    engine = _get_engine(state)
+
+    # Run Scraper Agent (tools invoked over MCP)
+    res = run_scraper_agent(query, engine, use_web=use_web, use_news=use_news)
+
     # Update logs list
     for log_item in res["logs"]:
         current_logs.append(log_item)
-        
+
     return {
         "logs": current_logs,
         "iterations": 0, # Initialize loop counter
@@ -78,7 +98,8 @@ def scraper_node(state: AletheiaState) -> Dict[str, Any]:
         "detected_conflicts": [],
         "verified_facts": [],
         "final_report": "",
-        "hallucination_score": 0.0
+        "hallucination_score": 0.0,
+        "audit_feedback": "",
     }
 
 def cross_checker_node(state: AletheiaState) -> Dict[str, Any]:
@@ -89,14 +110,23 @@ def cross_checker_node(state: AletheiaState) -> Dict[str, Any]:
     logger.info("Executing Cross-Checker Node...")
     query = state.get("query", "")
     temp = state.get("temperature", 0.0)
+    source_threshold = state.get("source_threshold", 0.0)
+    audit_feedback = state.get("audit_feedback", "")
     current_logs = state.get("logs", []) or []
     current_iters = state.get("iterations", 0)
-    
+    engine = _get_engine(state)
+
     if current_iters > 0:
         current_logs.append(f"[Sistem] Halüsinasyon düzeltme döngüsü tetiklendi! Iterasyon: {current_iters}")
-        
-    # Run Cross-Checker Agent
-    res = run_cross_checker_agent(query, rag_engine, temperature=temp)
+
+    # Run Cross-Checker Agent, threading source-trust threshold and any audit feedback
+    res = run_cross_checker_agent(
+        query,
+        engine,
+        temperature=temp,
+        min_trust_score=source_threshold,
+        audit_feedback=audit_feedback,
+    )
     
     for log_item in res["logs"]:
         current_logs.append(log_item)
@@ -159,12 +189,15 @@ def fact_checker_node(state: AletheiaState) -> Dict[str, Any]:
     
     current_logs.append(f"[Fact-Checker] Sadakat Skoru: %{int(faith_score * 100)}")
     current_logs.append(f"[Fact-Checker] Denetçi Gerekçesi: {reasoning}")
-    
+
     hallucination_score = float(1.0 - faith_score)
-    
+
+    # Preserve the auditor's reasoning as feedback so that, if we loop back, the
+    # cross-checker can actually correct the unsupported claims it produced.
     return {
         "logs": current_logs,
-        "hallucination_score": hallucination_score
+        "hallucination_score": hallucination_score,
+        "audit_feedback": reasoning,
     }
 
 def reporter_node(state: AletheiaState) -> Dict[str, Any]:
@@ -200,9 +233,15 @@ def reporter_node(state: AletheiaState) -> Dict[str, Any]:
     
     for log_item in res["logs"]:
         current_logs.append(log_item)
-        
+
     current_logs.append("--- [ALETHEIA DOĞRULAMA TAMAMLANDI - RAPOR HAZIR] ---")
-    
+
+    # Tear down this request's isolated RAG collection now that the run is complete.
+    session_id = state.get("session_id") or "default"
+    engine = _engines.pop(session_id, None)
+    if engine is not None:
+        engine.drop()
+
     return {
         "logs": current_logs,
         "final_report": res["final_report"]
@@ -220,25 +259,27 @@ def check_hallucinations(state: AletheiaState) -> str:
     iterations = state.get("iterations", 0)
     hallucination_score = state.get("hallucination_score", 0.0)
     faithfulness_score = 1.0 - hallucination_score
-    
-    logger.info(f"Conditional Routing - Iteration: {iterations}, Faithfulness: {faithfulness_score}")
-    
+    threshold = state.get("faithfulness_threshold", 0.85)
+    pct = int(threshold * 100)
+
+    logger.info(f"Conditional Routing - Iteration: {iterations}, Faithfulness: {faithfulness_score}, Threshold: {threshold}")
+
     # Max iterations exceeded. Exit loop to prevent lockup.
     if iterations >= 3:
         logger.warning("Max iterations limit reached! Routing directly to report synthesis.")
         state.get("logs", []).append("[Sistem] Maksimum denetim limitine ulaşıldı, rapor sentezleniyor...")
         return "reporter"
-        
-    # Check if faithfulness matches the 0.85 threshold
-    if faithfulness_score < 0.85:
-        logger.warning(f"Faithfulness score ({faithfulness_score}) < 0.85. HALLUCINATION DETECTED! Looping back.")
+
+    # Check faithfulness against the configured threshold
+    if faithfulness_score < threshold:
+        logger.warning(f"Faithfulness score ({faithfulness_score}) < {threshold}. HALLUCINATION DETECTED! Looping back.")
         state.get("logs", []).append(
-            f"[Sistem] UYARI: Halüsinasyon/Bağlam Dışı İddia Tespit Edildi (Sadakat Skoru: %{int(faithfulness_score*100)} < %85)! "
+            f"[Sistem] UYARI: Halüsinasyon/Bağlam Dışı İddia Tespit Edildi (Sadakat Skoru: %{int(faithfulness_score*100)} < %{pct})! "
             "Ajanlar düzeltme ve yeniden sorgulama yapmak üzere yönlendiriliyor..."
         )
         return "cross_checker"
     else:
-        logger.info(f"Faithfulness score ({faithfulness_score}) >= 0.85. Verification passed. Routing to reporter.")
+        logger.info(f"Faithfulness score ({faithfulness_score}) >= {threshold}. Verification passed. Routing to reporter.")
         state.get("logs", []).append("[Sistem] BİLGİ: Sadakat denetimi başarıyla tamamlandı. Rapor yazımına geçiliyor...")
         return "reporter"
 
