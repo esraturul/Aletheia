@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Aletheia Enterprise Verification Engine (Streamlit UI)
-Author: Senior AI Architect
+
 Description:
     Clean, trustworthy, and modern Enterprise AI SaaS interface inspired by Apple, Linear, and OpenAI.
     Hooks into FastAPI Server-Sent Events (SSE) to render live agent consensus logs

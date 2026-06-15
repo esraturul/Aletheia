@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Aletheia Advanced RAG Engine
-Author: Senior AI Architect
+
 Description:
     Implements the semantic document splitting (chunking), local vector storage indexing,
     and hybrid query-time reranking using local HuggingFace embeddings and BGE Cross-Encoder models.

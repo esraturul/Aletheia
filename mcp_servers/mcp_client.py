@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Aletheia MCP Client Bridge
-Author: Senior AI Architect
+
 Description:
     Connects to the Aletheia MCP servers (web scraper + news) over the real
     Model Context Protocol (stdio transport), lists/invokes their tools, and

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Aletheia LangGraph Orchestrator
-Author: Senior AI Architect
+
 Description:
     Defines the stateful multi-agent LangGraph workflow, connects nodes,
     and implements conditional routing loops based on faithfulness guardrail scores.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Aletheia FastAPI Gateway
-Author: Senior AI Architect
+
 Description:
     Exposes a Server-Sent Events (SSE) streaming API endpoint to execute the 
     LangGraph verification workflow asynchronously and push real-time agent logs, 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Aletheia Multi-Agent System Definition
-Author: Senior AI Architect
+
 Description:
     Defines agent personas, prompts, Pydantic schemas for verification, 
     and bridges LLM calls with RAG and MCP tools.

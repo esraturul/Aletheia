@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Aletheia Agent and Conflict Topology Graph Page
-Author: Senior AI Architect
 Description:
     Visualizes the multi-agent execution pipeline and semantic RAG relationships.
     Uses custom Plotly network topologies to draw nodes representing agents,

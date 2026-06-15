@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Aletheia MCP News API Server
-Author: Senior AI Architect
+
 Description:
     Model Context Protocol (MCP) server for fetching real-time news.
     Queries NewsAPI if key is available, or parses trusted global news RSS feeds 

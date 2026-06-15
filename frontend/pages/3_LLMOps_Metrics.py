@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Aletheia LLMOps and Performance Analytics Page
-Author: Senior AI Architect
+
 Description:
     Renders the monitoring & compliance statistics for the multi-agent system.
     Plots agent latency, accumulated execution costs, and historical faithfulness trends.

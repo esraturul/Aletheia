@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Aletheia MCP Web Scraper Server
-Author: Senior AI Architect
+
 Description:
     Model Context Protocol (MCP) server for searching and scraping the web.
     Integrates with Tavily and Serper, and provides a robust zero-key fallback using

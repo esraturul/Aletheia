@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Aletheia Knowledge Base and Vector Store Manager Page
-Author: Senior AI Architect
+
 Description:
     Provides direct visibility into the ChromaDB persistent index.
     Displays metrics, active source URLs, chunk aggregations, and handles
